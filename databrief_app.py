@@ -257,10 +257,13 @@ def build_summary(df: pd.DataFrame) -> str:
     return result
 
 def call_claude(system: str, message: str, max_tok: int = 800) -> str:
-    import time
+    import time, httpx
     t0 = time.time()
     print(f"[DataBrief] Chamando API Claude... max_tokens={max_tok}", flush=True)
-    r = get_client().messages.create(
+    client = anthropic.Anthropic(
+        timeout=httpx.Timeout(60.0, connect=10.0)
+    )
+    r = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tok,
         system=system,
