@@ -182,40 +182,64 @@ def read_excel_clean(file) -> pd.DataFrame:
 def get_client():
     return anthropic.Anthropic()
 
+def _safe_val(v):
+    import math
+    if v is None: return None
+    if isinstance(v, float) and math.isnan(v): return None
+    try:
+        import pandas as _pd
+        if isinstance(v, _pd.Timestamp): return v.isoformat() if not _pd.isna(v) else None
+    except Exception: pass
+    if hasattr(v, "item"): return v.item()
+    if hasattr(v, "isoformat"): return v.isoformat()
+    return v
+
 def build_summary(df: pd.DataFrame) -> str:
+    df = df.copy()
+    for col in df.select_dtypes(include=["datetime64[ns]", "datetimetz"]).columns:
+        df[col] = df[col].astype(str).replace("NaT", None)
+
     num_cols  = df.select_dtypes(include="number").columns.tolist()
-    text_cols = df.select_dtypes(exclude="number").columns.tolist()
+    text_cols = [c for c in df.columns if c not in num_cols]
+
     agg = {}
     for col in num_cols:
         vals = df[col].dropna()
         if len(vals) == 0: continue
         agg[col] = {
-            "soma":        round(float(vals.sum()),  2),
-            "media":       round(float(vals.mean()), 2),
-            "min":         round(float(vals.min()),  2),
-            "max":         round(float(vals.max()),  2),
-            "nao_nulos":   int(vals.count()),
+            "soma":      round(float(vals.sum()),  2),
+            "media":     round(float(vals.mean()), 2),
+            "min":       round(float(vals.min()),  2),
+            "max":       round(float(vals.max()),  2),
+            "nao_nulos": int(vals.count()),
         }
+
     freq = {}
     for col in text_cols:
-        f = df[col].value_counts(dropna=True).head(10).to_dict()
+        f = df[col].value_counts(dropna=True).head(8).to_dict()
         freq[col] = {str(k): int(v) for k, v in f.items()}
-    # Contagens explícitas por coluna para evitar alucinação
+
     contagens = {col: int(df[col].notna().sum()) for col in df.columns}
-    return json.dumps({
+
+    amostra = []
+    for row in df.head(5).to_dict(orient="records"):
+        amostra.append({k: _safe_val(v) for k, v in row.items()})
+
+    payload = {
         "ATENCAO": "Use APENAS os dados abaixo. Nunca invente ou estime valores.",
         "total_registros_exato": len(df),
         "colunas": df.columns.tolist(),
         "contagem_valores_por_coluna": contagens,
         "agregados_numericos": agg,
         "frequencias_categoricas": freq,
-        "amostra_10_linhas": df.head(10).to_dict(orient="records"),
-    }, ensure_ascii=False, indent=2)
+        "amostra_5_linhas": amostra,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
-def call_claude(system: str, message: str) -> str:
+def call_claude(system: str, message: str, max_tok: int = 800) -> str:
     r = get_client().messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1000,
+        max_tokens=max_tok,
         system=system,
         messages=[{"role": "user", "content": message}],
     )
@@ -481,10 +505,19 @@ else:
 
     summary     = build_summary(df)
     tipo_ctx = f"Tipo de negócio: {st.session_state.tipo_negocio}. " if st.session_state.tipo_negocio else ""
+    # Versão compacta do sumário para o chat — evita payload gigante a cada mensagem
+    import json as _json
+    _s = _json.loads(summary)
+    summary_chat = _json.dumps({
+        "total_registros": _s.get("total_registros_exato"),
+        "agregados":       _s.get("agregados_numericos", {}),
+        "frequencias":     {k: dict(list(v.items())[:5]) for k, v in _s.get("frequencias_categoricas", {}).items()},
+    }, ensure_ascii=False)
+
     system_chat = f"""Você é o DataBrief, analista de dados especialista em pequenos negócios.
-{tipo_ctx}Planilha recebida:
-{summary}
-Responda em português, de forma clara, objetiva e útil para tomada de decisão."""
+{tipo_ctx}Resumo dos dados da planilha:
+{summary_chat}
+Responda em português, de forma clara, objetiva e útil para tomada de decisão. Seja direto e conciso."""
 
     # Histórico do chat
     if not st.session_state.messages:
