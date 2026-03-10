@@ -260,20 +260,26 @@ def build_summary(df: pd.DataFrame) -> str:
     return result
 
 def call_claude(system: str, message: str, max_tok: int = 800) -> str:
-    import time, httpx
+    import time, httpx, os
     t0 = time.time()
-    print(f"[DataBrief] Chamando API Claude... max_tokens={max_tok}", flush=True)
-    client = anthropic.Anthropic(
-        timeout=httpx.Timeout(60.0, connect=10.0)
-    )
-    r = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=max_tok,
-        system=system,
-        messages=[{"role": "user", "content": message}],
-    )
-    print(f"[DataBrief] API respondeu em {time.time()-t0:.1f}s", flush=True)
-    return r.content[0].text
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    print(f"[DataBrief] Chamando API Claude... max_tokens={max_tok} | key={key[:12] if key else 'VAZIA'}", flush=True)
+    try:
+        client = anthropic.Anthropic(
+            api_key=key,
+            timeout=httpx.Timeout(45.0, connect=10.0)
+        )
+        r = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=max_tok,
+            system=system,
+            messages=[{"role": "user", "content": message}],
+        )
+        print(f"[DataBrief] API respondeu em {time.time()-t0:.1f}s", flush=True)
+        return r.content[0].text
+    except Exception as e:
+        print(f"[DataBrief] ERRO na API: {type(e).__name__}: {e}", flush=True)
+        raise
 
 def analyze_data(df: pd.DataFrame, tipo_negocio: str = "") -> dict:
     print(f"[DataBrief] analyze_data iniciado — {len(df)} linhas", flush=True)
