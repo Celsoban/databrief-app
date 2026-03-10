@@ -180,7 +180,10 @@ def read_excel_clean(file) -> pd.DataFrame:
 
 @st.cache_resource
 def get_client():
-    return anthropic.Anthropic()
+    import os
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    print(f"[DataBrief] API key presente: {bool(key)} | primeiros chars: {key[:12] if key else 'VAZIA'}", flush=True)
+    return anthropic.Anthropic(api_key=key)
 
 def _safe_val(v):
     import math
