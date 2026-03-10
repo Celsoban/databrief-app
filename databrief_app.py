@@ -231,25 +231,30 @@ def build_summary(df: pd.DataFrame) -> str:
             "nao_nulos": int(vals.count()),
         }
 
+    # Frequências: só colunas com baixa cardinalidade (categorias reais, não IDs/datas)
     freq = {}
     for col in text_cols:
-        f = df[col].value_counts(dropna=True).head(8).to_dict()
-        freq[col] = {str(k): int(v) for k, v in f.items()}
+        unique = df[col].nunique(dropna=True)
+        if unique <= 20:  # ignora colunas com muitos valores únicos (nomes, IDs, datas)
+            f = df[col].value_counts(dropna=True).head(5).to_dict()
+            freq[col] = {str(k): int(v) for k, v in f.items()}
 
-    contagens = {col: int(df[col].notna().sum()) for col in df.columns}
-
-    amostra = df.head(5).where(df.head(5).notna(), other=None).to_dict(orient="records")
+    # Amostra reduzida: só 3 linhas, só colunas numéricas + categóricas relevantes
+    cols_amostra = num_cols[:8] + [c for c in text_cols if c in freq][:5]
+    amostra = df[cols_amostra].head(3).where(df[cols_amostra].head(3).notna(), other=None).to_dict(orient="records")
 
     payload = {
         "ATENCAO": "Use APENAS os dados abaixo. Nunca invente ou estime valores.",
         "total_registros_exato": len(df),
-        "colunas": df.columns.tolist(),
-        "contagem_valores_por_coluna": contagens,
+        "colunas_numericas": num_cols,
+        "colunas_categoricas": list(freq.keys()),
         "agregados_numericos": agg,
         "frequencias_categoricas": freq,
-        "amostra_5_linhas": amostra,
+        "amostra_3_linhas": amostra,
     }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    result = json.dumps(payload, ensure_ascii=False, separators=(',',':'), default=str)
+    print(f"[DataBrief] summary otimizado — {len(result)} chars", flush=True)
+    return result
 
 def call_claude(system: str, message: str, max_tok: int = 800) -> str:
     import time
