@@ -195,9 +195,26 @@ def _safe_val(v):
     return v
 
 def build_summary(df: pd.DataFrame) -> str:
+    import math, pandas as _pd
+
     df = df.copy()
-    for col in df.select_dtypes(include=["datetime64[ns]", "datetimetz"]).columns:
-        df[col] = df[col].astype(str).replace("NaT", None)
+
+    # Converte TODAS as colunas de data/hora para string — inclui datetime64, datetimetz e object com Timestamp/NaT
+    for col in df.columns:
+        if _pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime("%Y-%m-%d").fillna("")
+        else:
+            # Converte cell a cell para pegar Timestamp/NaT escondido em object columns
+            def _to_safe(v):
+                if v is None: return None
+                if isinstance(v, float) and math.isnan(v): return None
+                if isinstance(v, _pd.Timestamp): return v.strftime("%Y-%m-%d") if not _pd.isna(v) else None
+                try:
+                    if _pd.isna(v): return None
+                except Exception: pass
+                if hasattr(v, "item"): return v.item()
+                return v
+            df[col] = df[col].apply(_to_safe)
 
     num_cols  = df.select_dtypes(include="number").columns.tolist()
     text_cols = [c for c in df.columns if c not in num_cols]
@@ -221,9 +238,7 @@ def build_summary(df: pd.DataFrame) -> str:
 
     contagens = {col: int(df[col].notna().sum()) for col in df.columns}
 
-    amostra = []
-    for row in df.head(5).to_dict(orient="records"):
-        amostra.append({k: _safe_val(v) for k, v in row.items()})
+    amostra = df.head(5).where(df.head(5).notna(), other=None).to_dict(orient="records")
 
     payload = {
         "ATENCAO": "Use APENAS os dados abaixo. Nunca invente ou estime valores.",
@@ -237,16 +252,22 @@ def build_summary(df: pd.DataFrame) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 def call_claude(system: str, message: str, max_tok: int = 800) -> str:
+    import time
+    t0 = time.time()
+    print(f"[DataBrief] Chamando API Claude... max_tokens={max_tok}", flush=True)
     r = get_client().messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tok,
         system=system,
         messages=[{"role": "user", "content": message}],
     )
+    print(f"[DataBrief] API respondeu em {time.time()-t0:.1f}s", flush=True)
     return r.content[0].text
 
 def analyze_data(df: pd.DataFrame, tipo_negocio: str = "") -> dict:
+    print(f"[DataBrief] analyze_data iniciado — {len(df)} linhas", flush=True)
     summary  = build_summary(df)
+    print(f"[DataBrief] summary gerado — {len(summary)} chars", flush=True)
     contexto = f"Tipo de negócio: {tipo_negocio}." if tipo_negocio else "Tipo de negócio: não informado — identifique pelo contexto dos dados."
     system   = (
         "Você é o DataBrief, analista de dados especialista em pequenos negócios.\n"
