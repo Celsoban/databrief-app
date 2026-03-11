@@ -579,7 +579,7 @@ Responda em português, de forma clara, objetiva e útil para tomada de decisão
         with st.chat_message("user", avatar="🧑"):
             st.markdown(user_input)
 
-        with st.chat_message("assistant", avatar="✦"):
+        with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("DataBrief está analisando…"):
                 history = "\n".join(
                     f"{'Usuário' if m['role']=='user' else 'DataBrief'}: {m['content']}"
