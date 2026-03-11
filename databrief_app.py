@@ -242,16 +242,43 @@ DRE_KEYWORDS = {"receita","despesa","custo","lucro","caixa","vendas","cmv",
 
 def detect_format(df: pd.DataFrame) -> str:
     """Retorna 'dre' ou 'tabular' baseado na estrutura da planilha."""
-    # Sinal 1: muitas colunas numéricas (dias do mês) vs poucas linhas únicas
+    import unicodedata
+
+    def normalize(s):
+        """Remove acentos e converte para minúsculo."""
+        return ''.join(c for c in unicodedata.normalize('NFD', str(s).lower())
+                       if unicodedata.category(c) != 'Mn')
+
+    DRE_KEYWORDS_NORM = {normalize(k) for k in DRE_KEYWORDS}
+
     num_cols = df.select_dtypes(include="number").columns
-    if len(num_cols) > 15 and len(df) < 200:
-        # Sinal 2: primeira ou segunda coluna tem palavras-chave contábeis
+    num_ratio = len(num_cols) / max(len(df.columns), 1)
+
+    # Log para diagnóstico
+    first_col_vals = df.iloc[:, 0].astype(str).tolist()[:10] if len(df.columns) > 0 else []
+    print(f"[DataBrief] detect_format: {len(df)} linhas, {len(df.columns)} colunas, "
+          f"{len(num_cols)} numéricas, ratio={num_ratio:.2f}", flush=True)
+    print(f"[DataBrief] primeiros valores col0: {first_col_vals[:5]}", flush=True)
+
+    # Sinal 1: muitas colunas numéricas relativas ao total (típico de DRE com dias)
+    if num_ratio > 0.5 and len(df) < 300:
+        # Sinal 2: primeiras colunas têm palavras-chave contábeis (normalizado)
         for col_idx in range(min(3, len(df.columns))):
-            col_vals = df.iloc[:, col_idx].astype(str).str.lower()
-            matches = col_vals.apply(lambda v: any(kw in v for kw in DRE_KEYWORDS)).sum()
-            if matches >= 3:
-                print(f"[DataBrief] Formato detectado: DRE ({matches} palavras-chave contábeis)", flush=True)
+            col_vals = df.iloc[:, col_idx].astype(str).apply(normalize)
+            matches = col_vals.apply(
+                lambda v: any(kw in v for kw in DRE_KEYWORDS_NORM)
+            ).sum()
+            print(f"[DataBrief] col{col_idx} matches: {matches}", flush=True)
+            if matches >= 2:
+                print(f"[DataBrief] Formato detectado: DRE ({matches} palavras-chave)", flush=True)
                 return "dre"
+
+    # Sinal alternativo: menos de 5 colunas texto e mais de 20 colunas numéricas
+    text_cols = len(df.columns) - len(num_cols)
+    if text_cols <= 3 and len(num_cols) >= 20 and len(df) < 300:
+        print(f"[DataBrief] Formato detectado: DRE (estrutura numérica densa)", flush=True)
+        return "dre"
+
     print(f"[DataBrief] Formato detectado: tabular", flush=True)
     return "tabular"
 
