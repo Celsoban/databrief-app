@@ -193,6 +193,11 @@ def read_excel_clean(file) -> pd.DataFrame:
                 rows.append([best.cell_value(r, c) for c in range(best.ncols)])
             df = pd.DataFrame(rows, columns=headers)
             print(f"[DataBrief] XLS lido — header na linha {header_idx}, {len(df)} linhas", flush=True)
+            # Log valores brutos para diagnóstico
+            if best.nrows > header_idx + 2:
+                sample_row = [best.cell_value(header_idx + 2, c) for c in range(min(6, best.ncols))]
+                sample_types = [best.cell_type(header_idx + 2, c) for c in range(min(6, best.ncols))]
+                print(f"[DataBrief] XLS amostra linha {header_idx+2}: valores={sample_row} tipos={sample_types}", flush=True)
         except ImportError:
             df = pd.read_excel(io.BytesIO(raw), engine="xlrd")
     else:
