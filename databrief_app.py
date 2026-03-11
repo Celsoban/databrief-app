@@ -159,22 +159,44 @@ hr { border-color:#1E2230 !important; margin:0 0 28px 0 !important; }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def read_excel_clean(file) -> pd.DataFrame:
-    """Lê Excel ignorando fórmulas, usando só a primeira aba com dados."""
-    import openpyxl, io
+    """Lê Excel (.xlsx e .xls) ignorando fórmulas, usando só a aba com mais dados."""
+    import io
     raw = file.read() if hasattr(file, "read") else open(file, "rb").read()
-    wb  = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
-    # Escolhe a aba com mais dados
-    best_sheet = max(wb.sheetnames, key=lambda s: wb[s].max_row * wb[s].max_column)
-    ws   = wb[best_sheet]
-    data = list(ws.values)
-    if not data:
-        raise ValueError("Planilha vazia.")
-    headers = [str(h) if h is not None else f"Col{i}" for i, h in enumerate(data[0])]
-    rows    = data[1:]
-    df = pd.DataFrame(rows, columns=headers)
-    # Remove colunas totalmente vazias ou que começam com fórmula
+    fname = getattr(file, "name", "") or ""
+    ext = fname.split(".")[-1].lower() if "." in fname else ""
+
+    # .xls (formato legado) — usa xlrd
+    if ext == "xls":
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=raw)
+            # Escolhe a aba com mais dados
+            best = max(wb.sheets(), key=lambda s: s.nrows * s.ncols)
+            headers = [str(best.cell_value(0, c)) or f"Col{c}" for c in range(best.ncols)]
+            rows = []
+            for r in range(1, best.nrows):
+                rows.append([best.cell_value(r, c) for c in range(best.ncols)])
+            df = pd.DataFrame(rows, columns=headers)
+        except ImportError:
+            # fallback: tenta pandas direto
+            df = pd.read_excel(io.BytesIO(raw), engine="xlrd")
+    else:
+        # .xlsx — usa openpyxl
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+        best_sheet = max(wb.sheetnames, key=lambda s: wb[s].max_row * wb[s].max_column)
+        ws = wb[best_sheet]
+        data = list(ws.values)
+        if not data:
+            raise ValueError("Planilha vazia.")
+        headers = [str(h) if h is not None else f"Col{i}" for i, h in enumerate(data[0])]
+        rows = data[1:]
+        df = pd.DataFrame(rows, columns=headers)
+
+    # Limpeza comum
     df = df.loc[:, df.apply(lambda col: not col.astype(str).str.startswith("=").all())]
     df = df.dropna(how="all").reset_index(drop=True)
+    print(f"[DataBrief] Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas", flush=True)
     return df
 
 
@@ -201,6 +223,14 @@ def build_summary(df: pd.DataFrame) -> str:
     import math, pandas as _pd
 
     df = df.copy()
+
+    # Limitador: máximo 500 linhas e 50 colunas para evitar timeout
+    if len(df) > 500:
+        df = df.sample(500, random_state=42)
+        print(f"[DataBrief] Amostragem aplicada: 500 de {len(df)} linhas", flush=True)
+    if len(df.columns) > 50:
+        df = df.iloc[:, :50]
+        print(f"[DataBrief] Colunas limitadas a 50", flush=True)
 
     # Converte TODAS as colunas de data/hora para string — inclui datetime64, datetimetz e object com Timestamp/NaT
     for col in df.columns:
