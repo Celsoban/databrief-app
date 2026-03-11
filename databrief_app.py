@@ -211,7 +211,33 @@ def read_excel_clean(file) -> pd.DataFrame:
     # Limpeza comum
     df = df.loc[:, df.apply(lambda col: not col.astype(str).str.startswith("=").all())]
     df = df.dropna(how="all").reset_index(drop=True)
-    print(f"[DataBrief] Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas", flush=True)
+
+    # Converte colunas que parecem numéricas mas vieram como texto
+    # (comum em DREs com formatação de moeda)
+    import re as _re
+    def _try_numeric(col):
+        def _parse(v):
+            if v is None: return v
+            s = str(v).strip()
+            if s in ("", "None", "nan", "-"): return None
+            # Remove R$, pontos de milhar, substitui vírgula decimal
+            s = s.replace("R$","").replace(" ","").replace("\t","").replace(".","").replace(",",".")
+            try: return float(s)
+            except: return v
+        converted = col.apply(_parse)
+        # Só converte se pelo menos 50% dos não-nulos virou número
+        non_null = converted.dropna()
+        num_count = sum(1 for v in non_null if isinstance(v, float))
+        if len(non_null) > 0 and num_count / len(non_null) >= 0.5:
+            return pd.to_numeric(converted, errors="coerce")
+        return col
+
+    for c in df.columns:
+        if df[c].dtype == object:
+            df[c] = _try_numeric(df[c])
+
+    num_after = len(df.select_dtypes(include="number").columns)
+    print(f"[DataBrief] Arquivo lido: {len(df)} linhas, {len(df.columns)} colunas ({num_after} numéricas)", flush=True)
     return df
 
 
