@@ -229,7 +229,15 @@ def build_summary(df: pd.DataFrame) -> str:
     if len(df.columns) > 30:
         # Prioriza colunas numéricas + categóricas de baixa cardinalidade
         num = df.select_dtypes(include="number").columns.tolist()[:15]
-        cat = [c for c in df.columns if c not in num and df[c].nunique() <= 20][:15]
+        cat = []
+        for c in df.columns:
+            if c not in num:
+                try:
+                    if int(df[c].nunique()) <= 20:
+                        cat.append(c)
+                except Exception:
+                    pass
+        cat = cat[:15]
         df = df[num + cat]
     print(f"[DataBrief] {len(df)} linhas | colunas: {original_cols} → {len(df.columns)}", flush=True)
 
