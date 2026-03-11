@@ -219,15 +219,135 @@ def _safe_val(v):
     if hasattr(v, "isoformat"): return v.isoformat()
     return v
 
-def build_summary(df: pd.DataFrame) -> str:
-    import math, pandas as _pd
+# ── Detector de formato ───────────────────────────────────────────────────────
+DRE_KEYWORDS = {"receita","despesa","custo","lucro","caixa","vendas","cmv",
+                "margem","resultado","faturamento","bruto","líquido","liquido",
+                "operacional","financeiro","tributo","imposto","folha","salario",
+                "salário","aluguel","total","subtotal","ebitda"}
 
-    df = df.copy()
+def detect_format(df: pd.DataFrame) -> str:
+    """Retorna 'dre' ou 'tabular' baseado na estrutura da planilha."""
+    # Sinal 1: muitas colunas numéricas (dias do mês) vs poucas linhas únicas
+    num_cols = df.select_dtypes(include="number").columns
+    if len(num_cols) > 15 and len(df) < 200:
+        # Sinal 2: primeira ou segunda coluna tem palavras-chave contábeis
+        for col_idx in range(min(3, len(df.columns))):
+            col_vals = df.iloc[:, col_idx].astype(str).str.lower()
+            matches = col_vals.apply(lambda v: any(kw in v for kw in DRE_KEYWORDS)).sum()
+            if matches >= 3:
+                print(f"[DataBrief] Formato detectado: DRE ({matches} palavras-chave contábeis)", flush=True)
+                return "dre"
+    print(f"[DataBrief] Formato detectado: tabular", flush=True)
+    return "tabular"
+
+def _safe_float(v):
+    import math
+    try:
+        f = float(v)
+        return None if math.isnan(f) or math.isinf(f) else round(f, 2)
+    except Exception:
+        return None
+
+def build_summary_dre(df: pd.DataFrame) -> str:
+    """Summary para planilhas DRE: linhas=contas, colunas=períodos."""
+    import math
+
+    # Identifica linha de cabeçalho dos períodos (procura linha com mais números)
+    header_row = 0
+    max_nums = 0
+    for i in range(min(15, len(df))):
+        nums = sum(1 for v in df.iloc[i] if _safe_float(v) is not None or str(v).strip().isdigit())
+        if nums > max_nums:
+            max_nums = nums
+            header_row = i
+
+    # Usa a linha identificada como cabeçalho dos períodos
+    period_headers = [str(df.iloc[header_row, c]).strip() for c in range(len(df.columns))]
+
+    # Identifica colunas de categoria (texto) e de valor (número)
+    # Geralmente as 2 primeiras colunas são categoria/subcategoria
+    cat_cols = []
+    val_col_indices = []
+    for c in range(len(df.columns)):
+        col_vals = df.iloc[header_row+1:, c]
+        num_count = sum(1 for v in col_vals if _safe_float(v) is not None)
+        if num_count > len(col_vals) * 0.5:
+            val_col_indices.append(c)
+        else:
+            cat_cols.append(c)
+
+    # Processa contas — ignora linhas de subtotal (células mescladas ou vazias na categoria)
+    contas = {}
+    subtotal_keywords = {"total","subtotal","resultado","líquido","liquido","bruto","ebitda"}
+
+    for i in range(header_row + 1, len(df)):
+        row = df.iloc[i]
+
+        # Nome da conta: concatena colunas de categoria não vazias
+        nome_parts = []
+        for c in cat_cols[:2]:
+            v = str(row.iloc[c]).strip() if row.iloc[c] is not None else ""
+            if v and v.lower() not in ("none","nan",""):
+                nome_parts.append(v)
+        if not nome_parts:
+            continue
+        nome = " > ".join(nome_parts)
+
+        # É subtotal?
+        is_subtotal = any(kw in nome.lower() for kw in subtotal_keywords)
+
+        # Coleta valores por período — pega só a coluna "Total" se existir
+        valores = {}
+        total_col = None
+        for c in val_col_indices:
+            header = period_headers[c].lower()
+            if "total" in header or header in ("total","t"):
+                total_col = c
+                break
+
+        if total_col is not None:
+            v = _safe_float(row.iloc[total_col])
+            if v is not None:
+                valores["total"] = v
+        else:
+            # Sem coluna total — soma todos os valores numéricos da linha
+            vals = [_safe_float(row.iloc[c]) for c in val_col_indices if _safe_float(row.iloc[c]) is not None]
+            if vals:
+                valores["total"] = round(sum(vals), 2)
+                # Guarda também min/max dos períodos para tendência
+                valores["periodo_min"] = min(vals)
+                valores["periodo_max"] = max(vals)
+                valores["media_diaria"] = round(sum(vals)/len(vals), 2)
+
+        if valores:
+            contas[nome] = {"subtotal": is_subtotal, **valores}
+
+    # Separa subtotais das contas detalhadas
+    subtotais = {k: v for k, v in contas.items() if v["subtotal"]}
+    detalhes  = {k: v for k, v in contas.items() if not v["subtotal"]}
+
+    # Top contas por valor total
+    top_contas = sorted(detalhes.items(), key=lambda x: abs(x[1].get("total", 0)), reverse=True)[:10]
+
+    payload = {
+        "ATENCAO": "Planilha DRE — linhas são contas contábeis, colunas são períodos. Use APENAS os dados abaixo.",
+        "formato": "DRE",
+        "total_contas": len(detalhes),
+        "periodos_identificados": len(val_col_indices),
+        "subtotais": {k: v["total"] for k, v in subtotais.items() if "total" in v},
+        "top_contas_por_valor": {k: v for k, v in top_contas},
+    }
+    result = json.dumps(payload, ensure_ascii=False, separators=(',',':'), default=str)
+    print(f"[DataBrief] summary DRE — {len(result)} chars, {len(detalhes)} contas", flush=True)
+    return result
+
+def build_summary_tabular(df: pd.DataFrame) -> str:
+    """Summary para planilhas tabulares convencionais (cada linha = 1 registro)."""
+    import math, pandas as _pd
 
     # Limita colunas (nunca linhas — agregados usam o dataset completo)
     original_cols = len(df.columns)
     if len(df.columns) > 30:
-        # Prioriza colunas numéricas + categóricas de baixa cardinalidade
         num = df.select_dtypes(include="number").columns.tolist()[:15]
         cat = []
         for c in df.columns:
@@ -241,12 +361,11 @@ def build_summary(df: pd.DataFrame) -> str:
         df = df[num + cat]
     print(f"[DataBrief] {len(df)} linhas | colunas: {original_cols} → {len(df.columns)}", flush=True)
 
-    # Converte TODAS as colunas de data/hora para string — inclui datetime64, datetimetz e object com Timestamp/NaT
+    # Converte datas para string
     for col in df.columns:
         if _pd.api.types.is_datetime64_any_dtype(df[col]):
             df[col] = df[col].dt.strftime("%Y-%m-%d").fillna("")
         else:
-            # Converte cell a cell para pegar Timestamp/NaT escondido em object columns
             def _to_safe(v):
                 if v is None: return None
                 if isinstance(v, float) and math.isnan(v): return None
@@ -273,20 +392,19 @@ def build_summary(df: pd.DataFrame) -> str:
             "nao_nulos": int(vals.count()),
         }
 
-    # Frequências: só colunas com baixa cardinalidade (categorias reais, não IDs/datas)
     freq = {}
     for col in text_cols:
         unique = df[col].nunique(dropna=True)
-        if unique <= 20:  # ignora colunas com muitos valores únicos (nomes, IDs, datas)
+        if unique <= 20:
             f = df[col].value_counts(dropna=True).head(5).to_dict()
             freq[col] = {str(k): int(v) for k, v in f.items()}
 
-    # Amostra reduzida: só 3 linhas, só colunas numéricas + categóricas relevantes
     cols_amostra = num_cols[:8] + [c for c in text_cols if c in freq][:5]
     amostra = df[cols_amostra].head(3).where(df[cols_amostra].head(3).notna(), other=None).to_dict(orient="records")
 
     payload = {
         "ATENCAO": "Use APENAS os dados abaixo. Nunca invente ou estime valores.",
+        "formato": "tabular",
         "total_registros_exato": len(df),
         "colunas_numericas": num_cols,
         "colunas_categoricas": list(freq.keys()),
@@ -295,8 +413,15 @@ def build_summary(df: pd.DataFrame) -> str:
         "amostra_3_linhas": amostra,
     }
     result = json.dumps(payload, ensure_ascii=False, separators=(',',':'), default=str)
-    print(f"[DataBrief] summary otimizado — {len(result)} chars", flush=True)
+    print(f"[DataBrief] summary tabular — {len(result)} chars", flush=True)
     return result
+
+def build_summary(df: pd.DataFrame) -> str:
+    """Detecta formato e delega para o summary correto."""
+    fmt = detect_format(df)
+    if fmt == "dre":
+        return build_summary_dre(df)
+    return build_summary_tabular(df)
 
 def call_claude(system: str, message: str, max_tok: int = 800) -> str:
     import time, httpx, os
@@ -325,13 +450,43 @@ def analyze_data(df: pd.DataFrame, tipo_negocio: str = "") -> dict:
     summary  = build_summary(df)
     print(f"[DataBrief] summary gerado — {len(summary)} chars", flush=True)
     contexto = f"Tipo de negócio: {tipo_negocio}." if tipo_negocio else "Tipo de negócio: não informado — identifique pelo contexto dos dados."
-    system   = (
-        "Você é o DataBrief, analista de dados especialista em pequenos negócios.\n"
-        + contexto + "\n"
-        + "Planilha recebida:\n" + summary + "\n"
-        + "Responda em português, de forma clara e direta para um dono de negócio sem conhecimento técnico."
-    )
-    raw     = call_claude(system, """Analise os dados e retorne SOMENTE JSON válido (sem markdown, sem texto extra):
+
+    # Detecta se é DRE para ajustar o prompt
+    is_dre = '"formato":"DRE"' in summary or '"formato": "DRE"' in summary
+
+    if is_dre:
+        system = (
+            "Você é o DataBrief, analista financeiro especialista em DRE para pequenos negócios.\n"
+            + contexto + "\n"
+            + "DRE recebido:\n" + summary + "\n"
+            + "Responda em português, de forma clara e direta para um dono de negócio sem conhecimento técnico."
+        )
+        prompt = """Analise o DRE e retorne SOMENTE JSON válido (sem markdown, sem texto extra):
+{
+  "kpis": [
+    {"label":"...","value":"...","sub":"..."}
+  ],
+  "melhorou": ["ponto positivo financeiro 1", "ponto positivo financeiro 2"],
+  "piorou":   ["ponto negativo financeiro 1", "ponto negativo financeiro 2"],
+  "alertas":  ["alerta financeiro 1", "alerta financeiro 2"],
+  "recomendacao": "Uma ação financeira concreta e imediata que o dono deve tomar agora."
+}
+REGRAS CRÍTICAS:
+- Use EXCLUSIVAMENTE os valores de "subtotais" e "top_contas_por_valor"
+- KPIs devem mostrar: receita total, maior despesa, margem ou resultado se disponível
+- "melhorou": contas com valores positivos ou receitas expressivas
+- "piorou": contas com maiores despesas ou valores negativos
+- "alertas": despesas elevadas, contas sem valor, desequilíbrios receita/despesa
+- "recomendacao": 1 ação prática baseada nos números do DRE
+- NUNCA invente valores. Se não houver dados suficientes, retorne lista vazia []"""
+    else:
+        system = (
+            "Você é o DataBrief, analista de dados especialista em pequenos negócios.\n"
+            + contexto + "\n"
+            + "Planilha recebida:\n" + summary + "\n"
+            + "Responda em português, de forma clara e direta para um dono de negócio sem conhecimento técnico."
+        )
+        prompt = """Analise os dados e retorne SOMENTE JSON válido (sem markdown, sem texto extra):
 {
   "kpis": [
     {"label":"...","value":"...","sub":"..."}
@@ -349,7 +504,9 @@ REGRAS CRÍTICAS:
 - "melhorou" e "piorou": comparações reais dentro dos dados (top vs bottom de frequências)
 - "alertas": concentrações, valores extremos, campos com muitos nulos
 - "recomendacao": 1 única ação prática baseada nos dados reais
-- Se não houver dados suficientes para alguma seção, retorne lista vazia []""")
+- Se não houver dados suficientes para alguma seção, retorne lista vazia []"""
+
+    raw = call_claude(system, prompt)
     return json.loads(raw.replace("```json","").replace("```","").strip())
 
 # ── Session state ─────────────────────────────────────────────────────────────
