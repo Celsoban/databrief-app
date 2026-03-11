@@ -172,13 +172,28 @@ def read_excel_clean(file) -> pd.DataFrame:
             wb = xlrd.open_workbook(file_contents=raw)
             # Escolhe a aba com mais dados
             best = max(wb.sheets(), key=lambda s: s.nrows * s.ncols)
-            headers = [str(best.cell_value(0, c)) or f"Col{c}" for c in range(best.ncols)]
+
+            # Detecta a linha de cabeçalho real:
+            # procura a primeira linha com pelo menos 3 células não-vazias
+            header_idx = 0
+            for r in range(min(20, best.nrows)):
+                filled = sum(1 for c in range(best.ncols)
+                             if str(best.cell_value(r, c)).strip() not in ("", "None", "nan"))
+                if filled >= 3:
+                    header_idx = r
+                    break
+
+            headers = []
+            for c in range(best.ncols):
+                v = str(best.cell_value(header_idx, c)).strip()
+                headers.append(v if v and v not in ("None","nan") else f"Col{c}")
+
             rows = []
-            for r in range(1, best.nrows):
+            for r in range(header_idx + 1, best.nrows):
                 rows.append([best.cell_value(r, c) for c in range(best.ncols)])
             df = pd.DataFrame(rows, columns=headers)
+            print(f"[DataBrief] XLS lido — header na linha {header_idx}, {len(df)} linhas", flush=True)
         except ImportError:
-            # fallback: tenta pandas direto
             df = pd.read_excel(io.BytesIO(raw), engine="xlrd")
     else:
         # .xlsx — usa openpyxl
