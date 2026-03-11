@@ -566,31 +566,46 @@ Responda em português, de forma clara, objetiva e útil para tomada de decisão
         """, unsafe_allow_html=True)
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"], avatar="🧑" if msg["role"]=="user" else "✦"):
-            st.markdown(msg["content"])
+        role_label = "Você" if msg["role"] == "user" else "DataBrief"
+        bg = "#1E2A3A" if msg["role"] == "user" else "#12201A"
+        border = "#2E4A6A" if msg["role"] == "user" else "#00E5C0"
+        align = "flex-end" if msg["role"] == "user" else "flex-start"
+        st.markdown(f"""
+        <div style="display:flex;justify-content:{align};margin:8px 0;">
+          <div style="background:{bg};border-left:3px solid {border};border-radius:8px;
+                      padding:12px 16px;max-width:85%;">
+            <div style="font-size:11px;color:#6B7280;margin-bottom:4px;">{role_label}</div>
+            <div style="color:#E5E7EB;font-size:14px;">{msg["content"]}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Input
-    user_input = st.chat_input(
-        "Ex: Qual produto vendeu mais? Quem performa melhor? Qual mês teve mais receita?"
-    )
+    # Input integrado ao layout
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    col_input, col_btn = st.columns([5, 1])
+    with col_input:
+        user_input = st.text_input(
+            label="chat_input",
+            label_visibility="collapsed",
+            placeholder="Ex: Qual produto vendeu mais? Quem performa melhor?",
+            key="chat_input_field"
+        )
+    with col_btn:
+        send = st.button("Enviar →", use_container_width=True)
 
-    if user_input:
+    if send and user_input:
         st.session_state.messages.append({"role":"user","content":user_input})
-        with st.chat_message("user", avatar="🧑"):
-            st.markdown(user_input)
-
-        with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("DataBrief está analisando…"):
-                history = "\n".join(
-                    f"{'Usuário' if m['role']=='user' else 'DataBrief'}: {m['content']}"
-                    for m in st.session_state.messages
+        with st.spinner("DataBrief está analisando…"):
+            history = "\n".join(
+                f"{'Usuário' if m['role']=='user' else 'DataBrief'}: {m['content']}"
+                for m in st.session_state.messages
+            )
+            try:
+                answer = call_claude(
+                    system_chat,
+                    f"Histórico:\n{history}\n\nResponda à última pergunta de forma clara e objetiva."
                 )
-                try:
-                    answer = call_claude(
-                        system_chat,
-                        f"Histórico:\n{history}\n\nResponda à última pergunta de forma clara e objetiva."
-                    )
-                except Exception as e:
-                    answer = f"Erro ao conectar com a IA: {e}"
-            st.markdown(answer)
+            except Exception as e:
+                answer = f"Erro ao conectar com a IA: {e}"
         st.session_state.messages.append({"role":"assistant","content":answer})
+        st.rerun()
