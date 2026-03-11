@@ -224,16 +224,14 @@ def build_summary(df: pd.DataFrame) -> str:
 
     df = df.copy()
 
-    # Limitador: máximo 300 linhas e 30 colunas para evitar out of memory
-    original_shape = (len(df), len(df.columns))
-    if len(df) > 300:
-        df = df.sample(300, random_state=42)
+    # Limita colunas (nunca linhas — agregados usam o dataset completo)
+    original_cols = len(df.columns)
     if len(df.columns) > 30:
         # Prioriza colunas numéricas + categóricas de baixa cardinalidade
         num = df.select_dtypes(include="number").columns.tolist()[:15]
         cat = [c for c in df.columns if c not in num and df[c].nunique() <= 20][:15]
         df = df[num + cat]
-    print(f"[DataBrief] Shape original: {original_shape} → reduzido para: {df.shape}", flush=True)
+    print(f"[DataBrief] {len(df)} linhas | colunas: {original_cols} → {len(df.columns)}", flush=True)
 
     # Converte TODAS as colunas de data/hora para string — inclui datetime64, datetimetz e object com Timestamp/NaT
     for col in df.columns:
