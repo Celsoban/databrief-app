@@ -223,16 +223,23 @@ def read_excel_clean(file) -> pd.DataFrame:
     def _try_numeric(col):
         def _parse(v):
             if v is None: return v
+            # Se já é número, retorna direto — não processar novamente
+            if isinstance(v, (int, float)):
+                import math
+                return None if math.isnan(v) else v
             s = str(v).strip()
-            if s in ("", "None", "nan", "-"): return None
-            # Remove R$, pontos de milhar, substitui vírgula decimal
-            s = s.replace("R$","").replace(" ","").replace("\t","").replace(".","").replace(",",".")
+            if s in ("", "None", "nan", "-", "0.0", "0"): return None
+            # Só tenta converter se parece moeda/número texto
+            # Remove R$, espaços — mas só remove ponto se há vírgula (formato BR)
+            s = s.replace("R$","").replace(" ","").strip()
+            if "," in s:
+                # Formato BR: 1.234,56 → remover ponto de milhar, trocar vírgula
+                s = s.replace(".","").replace(",",".")
             try: return float(s)
             except: return v
         converted = col.apply(_parse)
-        # Só converte se pelo menos 50% dos não-nulos virou número
         non_null = converted.dropna()
-        num_count = sum(1 for v in non_null if isinstance(v, float))
+        num_count = sum(1 for v in non_null if isinstance(v, (int, float)))
         if len(non_null) > 0 and num_count / len(non_null) >= 0.5:
             return pd.to_numeric(converted, errors="coerce")
         return col
@@ -401,6 +408,11 @@ def build_summary_dre(df: pd.DataFrame) -> str:
 
     # Top contas por valor total
     top_contas = sorted(detalhes.items(), key=lambda x: abs(x[1].get("total", 0)), reverse=True)[:10]
+
+    # Log para diagnóstico dos valores
+    print(f"[DataBrief] DRE: {len(subtotais)} subtotais, {len(detalhes)} detalhes", flush=True)
+    print(f"[DataBrief] DRE subtotais: {list(subtotais.items())[:3]}", flush=True)
+    print(f"[DataBrief] DRE top3 contas: {top_contas[:3]}", flush=True)
 
     payload = {
         "ATENCAO": "Planilha DRE — linhas são contas contábeis, colunas são períodos. Use APENAS os dados abaixo.",
